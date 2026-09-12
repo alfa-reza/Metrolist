@@ -70,6 +70,7 @@ import com.metrolist.music.lyrics.LyricsUtils
 import com.metrolist.music.models.MediaMetadata
 import com.metrolist.music.ui.component.DefaultDialog
 import com.metrolist.music.ui.component.ListDialog
+import com.metrolist.music.ui.component.ManualLyricsTranslationDialog
 import com.metrolist.music.ui.component.Material3MenuGroup
 import com.metrolist.music.ui.component.Material3MenuItemData
 import com.metrolist.music.ui.component.NewAction
@@ -106,8 +107,8 @@ fun LyricsMenu(
     val openRouterApiKey by rememberPreference(OpenRouterApiKey, "")
     val deeplApiKey by rememberPreference(DeeplApiKey, "")
     val aiProvider by rememberPreference(AiProviderKey, "OpenRouter")
-    val translateLanguage by rememberPreference(TranslateLanguageKey, "en")
-    val translateMode by rememberPreference(TranslateModeKey, "Literal")
+    var translateLanguage by rememberPreference(TranslateLanguageKey, "en")
+    var translateMode by rememberPreference(TranslateModeKey, "Literal")
     val openRouterBaseUrl by rememberPreference(OpenRouterBaseUrlKey, OpenRouterDefaultBaseUrl)
     val openRouterModel by rememberPreference(OpenRouterModelKey, OpenRouterDefaultModel)
     val deeplFormality by rememberPreference(DeeplFormalityKey, "default")
@@ -119,6 +120,12 @@ fun LyricsMenu(
     // Observe the authoritative translation-active state from the singleton; this persists
     // correctly across menu open/close cycles and avoids the lyricsProvider() race condition.
     val hasTranslations by LyricsTranslationHelper.hasActiveTranslations.collectAsStateWithLifecycle()
+
+    val rawLyrics = lyricsProvider()?.lyrics
+    val translatableLines = remember(rawLyrics) { LyricsUtils.getTranslatableLyricLines(rawLyrics) }
+    var manualLyricsSourceSnapshot by remember {
+        mutableStateOf<LyricsTranslationHelper.ManualLyricsSource?>(null)
+    }
 
     var showEditDialog by rememberSaveable {
         mutableStateOf(false)
@@ -474,8 +481,8 @@ fun LyricsMenu(
         item {
             Material3MenuGroup(
                 items = buildList {
-                    // Add translation toggle option if API key is configured
-                    if (hasApiKey) {
+                    // Add translation toggle option if API key is configured or translations exist
+                    if (hasApiKey || hasTranslations) {
                         add(
                             Material3MenuItemData(
                                 title = { Text(stringResource(R.string.ai_lyrics_translation)) },
@@ -535,6 +542,26 @@ fun LyricsMenu(
                                         )
                                     )
                                 }
+                            )
+                        )
+                    }
+
+                    if (rawLyrics != null && rawLyrics != LyricsEntity.LYRICS_NOT_FOUND && translatableLines.isNotEmpty()) {
+                        add(
+                            Material3MenuItemData(
+                                title = { Text(stringResource(R.string.manual_ai_translation)) },
+                                icon = {
+                                    Icon(
+                                        painter = painterResource(R.drawable.translate),
+                                        contentDescription = null,
+                                    )
+                                },
+                                onClick = {
+                                    manualLyricsSourceSnapshot = LyricsTranslationHelper.ManualLyricsSource(
+                                        songId = mediaMetadataProvider().id,
+                                        sourceLines = translatableLines,
+                                    )
+                                },
                             )
                         )
                     }
@@ -687,5 +714,18 @@ fun LyricsMenu(
                 }
             )
         }
+    }
+
+    manualLyricsSourceSnapshot?.let { snapshot ->
+        ManualLyricsTranslationDialog(
+            sourceSnapshot = snapshot,
+            initialLanguageCode = translateLanguage,
+            initialMode = translateMode,
+            onDismiss = { manualLyricsSourceSnapshot = null },
+            onImportSuccess = { langCode, mode ->
+                translateLanguage = langCode
+                translateMode = mode
+            },
+        )
     }
 }

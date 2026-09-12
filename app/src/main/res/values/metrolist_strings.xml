@@ -707,6 +707,27 @@
     <string name="ai_system_prompt_default">Default</string>
     <string name="ai_system_prompt_reset">Reset to default</string>
 
+    <!-- Manual AI Translation -->
+    <string name="manual_ai_translation">Manual AI translation</string>
+    <string name="copy_prompt">Copy prompt</string>
+    <string name="share_prompt">Share prompt</string>
+    <string name="paste_ai_response">Paste AI response</string>
+    <string name="import_translation">Import</string>
+    <string name="translation_is_valid">✓ Valid JSON (%1$d / %2$d lines)</string>
+    <string name="invalid_translation_json">Invalid translation JSON. Paste the raw JSON output from your chatbot.</string>
+    <string name="missing_lines_array">Response does not contain a valid \"lines\" array.</string>
+    <string name="non_string_element">All entries in the \"lines\" array must be strings.</string>
+    <string name="embedded_newline_rejected">Line %1$d contains an embedded newline. Each lyric line must be a single line.</string>
+    <string name="extra_properties_rejected">Response contains unexpected properties (%1$s). Only \"lines\" is allowed.</string>
+    <string name="all_lines_blank_rejected">Translation contains only blank lines. At least one line must contain translated text.</string>
+    <string name="source_lyrics_changed">Song lyrics have changed. Please regenerate the prompt.</string>
+    <string name="line_count_mismatch">Line count mismatch. Expected %1$d lines, but received %2$d.</string>
+    <string name="empty_ai_response">No AI response entered.</string>
+    <string name="prompt_copied">Prompt copied to clipboard</string>
+    <string name="translation_imported">Translation imported</string>
+    <string name="paste_json_hint">Paste JSON response here…</string>
+    <string name="lines_count">%1$d lyric lines</string>
+
     <!-- Crash Handler -->
     <string name="crash_title">App crashed</string>
     <string name="crash_description">An unexpected error occurred. Please share the crash report to help us fix the issue</string>

@@ -96,6 +96,54 @@ object LyricsTranslationHelper {
         )
     }
 
+    data class ManualLyricsSource(
+        val songId: String,
+        val sourceLines: List<String>,
+    )
+
+    sealed interface ManualImportResult {
+        data object Success : ManualImportResult
+        data object SourceMismatch : ManualImportResult
+        data class Error(val throwable: Throwable) : ManualImportResult
+    }
+
+    suspend fun saveAndApplyManualTranslation(
+        database: MusicDatabase,
+        sourceSnapshot: ManualLyricsSource,
+        translatedLines: List<String>,
+        targetLanguageCode: String,
+        mode: String,
+    ): ManualImportResult = runCatching {
+        var isMismatch = false
+        database.withTransaction {
+            val latestEntity = lyrics(sourceSnapshot.songId).first()
+            val currentLines = LyricsUtils.getTranslatableLyricLines(latestEntity?.lyrics)
+            if (latestEntity == null || currentLines != sourceSnapshot.sourceLines) {
+                isMismatch = true
+                return@withTransaction
+            }
+            upsert(
+                latestEntity.copy(
+                    translatedLyrics = translatedLines.joinToString("\n"),
+                    translationLanguage = targetLanguageCode,
+                    translationMode = mode,
+                )
+            )
+        }
+        if (isMismatch) {
+            ManualImportResult.SourceMismatch
+        } else {
+            val fullText = sourceSnapshot.sourceLines.joinToString("\n")
+            val cacheKey = getCacheKey(fullText, mode, targetLanguageCode)
+            translationCache[cacheKey] = translatedLines
+            _hasActiveTranslations.value = true
+            ManualImportResult.Success
+        }
+    }.getOrElse { error ->
+        Timber.e(error, "Failed to save manual translation")
+        ManualImportResult.Error(error)
+    }
+
     fun cancelTranslation() {
         translationJob?.cancel()
         if (_status.value is TranslationStatus.Translating) {
