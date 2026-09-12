@@ -1409,4 +1409,16 @@ object LyricsUtils {
                 lyrics.contains(PAXSENIX_AGENT_LINE_REGEX) ||
                 lyrics.contains(PAXSENIX_BG_LINE_REGEX)
     }
+
+    fun getTranslatableLyricLines(rawLyrics: String?): List<String> {
+        if (rawLyrics.isNullOrBlank() || rawLyrics == com.metrolist.music.db.entities.LyricsEntity.LYRICS_NOT_FOUND) return emptyList()
+        val timestampRegex = Regex("\\[\\d{1,2}:\\d{2}")
+        val isLrc = timestampRegex.containsMatchIn(rawLyrics)
+        val parsedLines = if (isLrc) parseLyrics(rawLyrics) else emptyList()
+        return if (parsedLines.isNotEmpty()) {
+            parsedLines.map { it.text }.filter { it.isNotBlank() }
+        } else {
+            rawLyrics.lines().filter { it.isNotBlank() && !timestampRegex.containsMatchIn(it) }
+        }
+    }
 }
