@@ -12,6 +12,7 @@ import com.metrolist.music.db.entities.SongEntity
 import com.metrolist.music.api.DeepLService
 import com.metrolist.music.api.OpenRouterService
 import com.metrolist.music.api.OpenRouterStreamingService
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -22,10 +23,14 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import timber.log.Timber
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * A helper class that provides AI-powered translation for lyrics.
@@ -45,6 +50,8 @@ object LyricsTranslationHelper {
 
     private var translationJob: kotlinx.coroutines.Job? = null
     private var isCompositionActive = true
+    private val activeSessionId = AtomicLong(0L)
+    private val translationStateMutex = Mutex()
 
     // Cache translations in memory to avoid redundant API calls during a session
     private val translationCache = ConcurrentHashMap<String, List<String>>()
@@ -113,42 +120,55 @@ object LyricsTranslationHelper {
         translatedLines: List<String>,
         targetLanguageCode: String,
         mode: String,
-    ): ManualImportResult = runCatching {
-        var isMismatch = false
-        database.withTransaction {
-            val latestEntity = lyrics(sourceSnapshot.songId).first()
-            val currentLines = LyricsUtils.getTranslatableLyricLines(latestEntity?.lyrics)
-            if (latestEntity == null || currentLines != sourceSnapshot.sourceLines) {
-                isMismatch = true
-                return@withTransaction
+        activeSongIdProvider: () -> String? = { null },
+    ): ManualImportResult {
+        cancelTranslation()
+        return try {
+            var isMismatch = false
+            translationStateMutex.withLock {
+                database.withTransaction {
+                    val latestEntity = lyrics(sourceSnapshot.songId).first()
+                    val currentLines = LyricsUtils.getTranslatableLyricLines(latestEntity?.lyrics)
+                    if (latestEntity == null || currentLines != sourceSnapshot.sourceLines) {
+                        isMismatch = true
+                        return@withTransaction
+                    }
+                    upsert(
+                        latestEntity.copy(
+                            translatedLyrics = translatedLines.joinToString("\n"),
+                            translationLanguage = targetLanguageCode,
+                            translationMode = mode,
+                        )
+                    )
+                }
+                if (!isMismatch) {
+                    val fullText = sourceSnapshot.sourceLines.joinToString("\n")
+                    val cacheKey = getCacheKey(fullText, mode, targetLanguageCode)
+                    translationCache[cacheKey] = translatedLines
+
+                    val currentActiveId = activeSongIdProvider()
+                    if (currentActiveId != null && currentActiveId == sourceSnapshot.songId) {
+                        _hasActiveTranslations.value = true
+                    }
+                    _status.value = TranslationStatus.Idle
+                }
             }
-            upsert(
-                latestEntity.copy(
-                    translatedLyrics = translatedLines.joinToString("\n"),
-                    translationLanguage = targetLanguageCode,
-                    translationMode = mode,
-                )
-            )
+            if (isMismatch) {
+                ManualImportResult.SourceMismatch
+            } else {
+                ManualImportResult.Success
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            Timber.e(e, "Failed to save manual translation")
+            ManualImportResult.Error(e)
         }
-        if (isMismatch) {
-            ManualImportResult.SourceMismatch
-        } else {
-            val fullText = sourceSnapshot.sourceLines.joinToString("\n")
-            val cacheKey = getCacheKey(fullText, mode, targetLanguageCode)
-            translationCache[cacheKey] = translatedLines
-            _hasActiveTranslations.value = true
-            ManualImportResult.Success
-        }
-    }.getOrElse { error ->
-        Timber.e(error, "Failed to save manual translation")
-        ManualImportResult.Error(error)
     }
 
     fun cancelTranslation() {
+        activeSessionId.incrementAndGet()
         translationJob?.cancel()
-        if (_status.value is TranslationStatus.Translating) {
-            _status.value = TranslationStatus.Idle
-        }
+        _status.value = TranslationStatus.Idle
     }
 
     private fun getCacheKey(text: String, mode: String, targetLanguage: String): String {
@@ -230,6 +250,7 @@ object LyricsTranslationHelper {
         database: MusicDatabase? = null,
         systemPrompt: String = "",
     ) {
+        val currentSession = activeSessionId.incrementAndGet()
         translationJob?.cancel()
         _status.value = TranslationStatus.Translating
 
@@ -242,12 +263,20 @@ object LyricsTranslationHelper {
                     // Validate inputs
                     val effectiveApiKey = if (provider == "DeepL") deeplApiKey else apiKey
                     if (effectiveApiKey.isBlank()) {
-                        _status.value = TranslationStatus.Error(context.getString(com.metrolist.music.R.string.ai_error_api_key_required))
+                        translationStateMutex.withLock {
+                            if (currentSession == activeSessionId.get() && coroutineContext.isActive && isCompositionActive) {
+                                _status.value = TranslationStatus.Error(context.getString(com.metrolist.music.R.string.ai_error_api_key_required))
+                            }
+                        }
                         return@launch
                     }
 
                     if (lyrics.isEmpty()) {
-                        _status.value = TranslationStatus.Error(context.getString(com.metrolist.music.R.string.ai_error_no_lyrics))
+                        translationStateMutex.withLock {
+                            if (currentSession == activeSessionId.get() && coroutineContext.isActive && isCompositionActive) {
+                                _status.value = TranslationStatus.Error(context.getString(com.metrolist.music.R.string.ai_error_no_lyrics))
+                            }
+                        }
                         return@launch
                     }
 
@@ -258,7 +287,11 @@ object LyricsTranslationHelper {
                         }
 
                     if (nonEmptyEntries.isEmpty()) {
-                        _status.value = TranslationStatus.Error(context.getString(com.metrolist.music.R.string.ai_error_lyrics_empty))
+                        translationStateMutex.withLock {
+                            if (currentSession == activeSessionId.get() && coroutineContext.isActive && isCompositionActive) {
+                                _status.value = TranslationStatus.Error(context.getString(com.metrolist.music.R.string.ai_error_lyrics_empty))
+                            }
+                        }
                         return@launch
                     }
 
@@ -269,46 +302,63 @@ object LyricsTranslationHelper {
                     val cacheKey = getCacheKey(fullText, mode, targetLanguage)
                     val cachedTranslations = translationCache[cacheKey]
                     if (cachedTranslations != null && cachedTranslations.size >= nonEmptyEntries.size) {
-                        // Use cached translations
-                        nonEmptyEntries.forEachIndexed { idx, (originalIndex, _) ->
-                            if (idx < cachedTranslations.size) {
-                                lyrics[originalIndex].translatedTextFlow.value = cachedTranslations[idx]
+                        translationStateMutex.withLock {
+                            if (currentSession != activeSessionId.get() || !coroutineContext.isActive || !isCompositionActive) {
+                                return@launch
                             }
-                        }
-                        _hasActiveTranslations.value = true
-                        _status.value = TranslationStatus.Success
 
-                        // Persist cached translations to DB so loadTranslationsFromDatabase can't
-                        // overwrite them with a stale empty entity (e.g. after an untranslate race).
-                        if (songId.isNotBlank() && database != null) {
-                            try {
-                                val currentLyrics = database.lyrics(songId).first()
-                                if (currentLyrics != null && currentLyrics.translatedLyrics.isNullOrBlank()) {
-                                    database.query {
-                                        upsert(
-                                            currentLyrics.copy(
-                                                translatedLyrics = cachedTranslations.joinToString("\n"),
-                                                translationLanguage = targetLanguage,
-                                                translationMode = mode,
-                                            ),
-                                        )
+                            // Persist cached translations to DB so loadTranslationsFromDatabase can't
+                            // overwrite them with a stale empty entity (e.g. after an untranslate race).
+                            if (songId.isNotBlank() && database != null) {
+                                try {
+                                    database.withTransaction {
+                                        val currentLyrics = lyrics(songId).first()
+                                        if (currentLyrics != null && currentLyrics.translatedLyrics.isNullOrBlank()) {
+                                            upsert(
+                                                currentLyrics.copy(
+                                                    translatedLyrics = cachedTranslations.joinToString("\n"),
+                                                    translationLanguage = targetLanguage,
+                                                    translationMode = mode,
+                                                ),
+                                            )
+                                        }
                                     }
+                                } catch (e: Exception) {
+                                    if (e is CancellationException) throw e
+                                    Timber.e(e, "Failed to persist cached translations to database")
                                 }
-                            } catch (e: Exception) {
-                                Timber.e(e, "Failed to persist cached translations to database")
                             }
+
+                            if (currentSession != activeSessionId.get() || !coroutineContext.isActive || !isCompositionActive) {
+                                return@launch
+                            }
+
+                            // Use cached translations
+                            nonEmptyEntries.forEachIndexed { idx, (originalIndex, _) ->
+                                if (idx < cachedTranslations.size) {
+                                    lyrics[originalIndex].translatedTextFlow.value = cachedTranslations[idx]
+                                }
+                            }
+                            _hasActiveTranslations.value = true
+                            _status.value = TranslationStatus.Success
                         }
 
                         delay(3000)
-                        if (_status.value is TranslationStatus.Success && isCompositionActive) {
-                            _status.value = TranslationStatus.Idle
+                        translationStateMutex.withLock {
+                            if (currentSession == activeSessionId.get() && coroutineContext.isActive && isCompositionActive && _status.value is TranslationStatus.Success) {
+                                _status.value = TranslationStatus.Idle
+                            }
                         }
                         return@launch
                     }
 
                     // Validate language for all modes
                     if (targetLanguage.isBlank()) {
-                        _status.value = TranslationStatus.Error(context.getString(com.metrolist.music.R.string.ai_error_language_required))
+                        translationStateMutex.withLock {
+                            if (currentSession == activeSessionId.get() && coroutineContext.isActive && isCompositionActive) {
+                                _status.value = TranslationStatus.Error(context.getString(com.metrolist.music.R.string.ai_error_language_required))
+                            }
+                        }
                         return@launch
                     }
 
@@ -360,14 +410,18 @@ object LyricsTranslationHelper {
                                             val partialContent = contentAccumulator.toString()
                                             val partialResult = tryParsePartialTranslation(partialContent, nonEmptyEntries.size)
                                             if (partialResult.isNotEmpty()) {
-                                                // Update lyrics with partial translations as they become available
-                                                partialResult.forEachIndexed { idx, translation ->
-                                                    if (idx < nonEmptyEntries.size && translation.isNotBlank()) {
-                                                        val originalIndex = nonEmptyEntries[idx].first
-                                                        lyrics[originalIndex].translatedTextFlow.value = translation
+                                                translationStateMutex.withLock {
+                                                    if (currentSession == activeSessionId.get() && coroutineContext.isActive && isCompositionActive) {
+                                                        // Update lyrics with partial translations as they become available
+                                                        partialResult.forEachIndexed { idx, translation ->
+                                                            if (idx < nonEmptyEntries.size && translation.isNotBlank()) {
+                                                                val originalIndex = nonEmptyEntries[idx].first
+                                                                lyrics[originalIndex].translatedTextFlow.value = translation
+                                                            }
+                                                        }
+                                                        _status.value = TranslationStatus.Translating
                                                     }
                                                 }
-                                                _status.value = TranslationStatus.Translating
                                             }
                                         }
 
@@ -408,82 +462,92 @@ object LyricsTranslationHelper {
 
                     result
                         .onSuccess { translatedLines ->
-                            // Check if composition is still active before updating state
-                            if (!isCompositionActive) {
-                                return@onSuccess
-                            }
-
-                            // Cache the translations
-                            val cacheKey = getCacheKey(fullText, mode, targetLanguage)
-                            translationCache[cacheKey] = translatedLines
-
-                            // Save to database if songId is provided
-                            if (songId.isNotBlank() && database != null) {
-                                try {
-                                    val currentLyrics = database.lyrics(songId).first()
-                                    if (currentLyrics != null) {
-                                        database.query {
-                                            upsert(
-                                                currentLyrics.copy(
-                                                    translatedLyrics = translatedLines.joinToString("\n"),
-                                                    translationLanguage = targetLanguage,
-                                                    translationMode = mode,
-                                                ),
-                                            )
-                                        }
-                                    }
-                                } catch (e: Exception) {
-                                    Timber.e(e, "Failed to save translated lyrics to database")
-                                }
-                            }
-
-                            // Map translations back to original non-empty entries only
-                            val expectedCount = nonEmptyEntries.size
-
-                            when {
-                                translatedLines.size >= expectedCount -> {
-                                    // Perfect match or more - map to non-empty entries
-                                    nonEmptyEntries.forEachIndexed { idx, (originalIndex, _) ->
-                                        lyrics[originalIndex].translatedTextFlow.value = translatedLines[idx]
-                                    }
-                                    _hasActiveTranslations.value = true
-                                    _status.value = TranslationStatus.Success
+                            translationStateMutex.withLock {
+                                // Check if session and composition are still active before updating state
+                                if (currentSession != activeSessionId.get() || !coroutineContext.isActive || !isCompositionActive) {
+                                    return@onSuccess
                                 }
 
-                                translatedLines.size < expectedCount -> {
-                                    // Fewer translations than expected - map what we have
-                                    translatedLines.forEachIndexed { idx, translation ->
-                                        if (idx < nonEmptyEntries.size) {
-                                            val originalIndex = nonEmptyEntries[idx].first
-                                            lyrics[originalIndex].translatedTextFlow.value = translation
+                                // Save to database if songId is provided
+                                if (songId.isNotBlank() && database != null) {
+                                    try {
+                                        database.withTransaction {
+                                            val currentLyrics = lyrics(songId).first()
+                                            if (currentLyrics != null) {
+                                                upsert(
+                                                    currentLyrics.copy(
+                                                        translatedLyrics = translatedLines.joinToString("\n"),
+                                                        translationLanguage = targetLanguage,
+                                                        translationMode = mode,
+                                                    ),
+                                                )
+                                            }
                                         }
+                                    } catch (e: Exception) {
+                                        if (e is CancellationException) throw e
+                                        Timber.e(e, "Failed to save translated lyrics to database")
                                     }
-                                    _hasActiveTranslations.value = true
-                                    _status.value = TranslationStatus.Success
+                                }
+
+                                if (currentSession != activeSessionId.get() || !coroutineContext.isActive || !isCompositionActive) {
+                                    return@onSuccess
+                                }
+
+                                // Cache the translations
+                                val cacheKey = getCacheKey(fullText, mode, targetLanguage)
+                                translationCache[cacheKey] = translatedLines
+
+                                // Map translations back to original non-empty entries only
+                                val expectedCount = nonEmptyEntries.size
+
+                                when {
+                                    translatedLines.size >= expectedCount -> {
+                                        // Perfect match or more - map to non-empty entries
+                                        nonEmptyEntries.forEachIndexed { idx, (originalIndex, _) ->
+                                            lyrics[originalIndex].translatedTextFlow.value = translatedLines[idx]
+                                        }
+                                        _hasActiveTranslations.value = true
+                                        _status.value = TranslationStatus.Success
+                                    }
+
+                                    translatedLines.size < expectedCount -> {
+                                        // Fewer translations than expected - map what we have
+                                        translatedLines.forEachIndexed { idx, translation ->
+                                            if (idx < nonEmptyEntries.size) {
+                                                val originalIndex = nonEmptyEntries[idx].first
+                                                lyrics[originalIndex].translatedTextFlow.value = translation
+                                            }
+                                        }
+                                        _hasActiveTranslations.value = true
+                                        _status.value = TranslationStatus.Success
+                                    }
                                 }
                             }
 
                             // Auto-hide success message after 3 seconds
                             delay(3000)
-                            if (_status.value is TranslationStatus.Success && isCompositionActive) {
-                                _status.value = TranslationStatus.Idle
+                            translationStateMutex.withLock {
+                                if (currentSession == activeSessionId.get() && coroutineContext.isActive && isCompositionActive && _status.value is TranslationStatus.Success) {
+                                    _status.value = TranslationStatus.Idle
+                                }
                             }
                         }
                         .onFailure { error ->
-                            if (!isCompositionActive) {
-                                return@onFailure
+                            if (error is CancellationException) throw error
+                            translationStateMutex.withLock {
+                                if (currentSession == activeSessionId.get() && coroutineContext.isActive && isCompositionActive) {
+                                    val errorMessage = error.message ?: context.getString(com.metrolist.music.R.string.ai_error_unknown)
+                                    _status.value = TranslationStatus.Error(errorMessage)
+                                }
                             }
-
-                            val errorMessage = error.message ?: context.getString(com.metrolist.music.R.string.ai_error_unknown)
-
-                            // Show error in UI
-                            _status.value = TranslationStatus.Error(errorMessage)
                         }
                 } catch (e: Exception) {
-                    // Ignore cancellation exceptions or if composition is no longer active
-                    if (e !is kotlinx.coroutines.CancellationException && isCompositionActive) {
-                        val errorMessage = e.message ?: context.getString(com.metrolist.music.R.string.ai_error_translation_failed)
-                        _status.value = TranslationStatus.Error(errorMessage)
+                    if (e is CancellationException) throw e
+                    translationStateMutex.withLock {
+                        if (currentSession == activeSessionId.get() && coroutineContext.isActive && isCompositionActive) {
+                            val errorMessage = e.message ?: context.getString(com.metrolist.music.R.string.ai_error_translation_failed)
+                            _status.value = TranslationStatus.Error(errorMessage)
+                        }
                     }
                 }
             }

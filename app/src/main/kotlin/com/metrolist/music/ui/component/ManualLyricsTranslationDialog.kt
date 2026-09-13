@@ -46,6 +46,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import com.metrolist.music.LocalDatabase
+import com.metrolist.music.LocalPlayerConnection
 import com.metrolist.music.R
 import com.metrolist.music.constants.LanguageCodeToName
 import com.metrolist.music.lyrics.LyricsTranslationFormat
@@ -62,6 +63,7 @@ fun ManualLyricsTranslationDialog(
 ) {
     val context = LocalContext.current
     val database = LocalDatabase.current
+    val playerConnection = LocalPlayerConnection.current
     val scope = rememberCoroutineScope()
 
     var selectedLanguageCode by rememberSaveable { mutableStateOf(initialLanguageCode) }
@@ -97,7 +99,11 @@ fun ManualLyricsTranslationDialog(
         EnumDialog(
             onDismiss = { showLanguageDialog = false },
             onSelect = {
-                selectedLanguageCode = it
+                if (it != selectedLanguageCode) {
+                    selectedLanguageCode = it
+                    responseText = TextFieldValue("")
+                    importErrorMessage = null
+                }
                 showLanguageDialog = false
             },
             title = stringResource(R.string.ai_target_language),
@@ -111,7 +117,11 @@ fun ManualLyricsTranslationDialog(
         EnumDialog(
             onDismiss = { showModeDialog = false },
             onSelect = {
-                selectedMode = it
+                if (it != selectedMode) {
+                    selectedMode = it
+                    responseText = TextFieldValue("")
+                    importErrorMessage = null
+                }
                 showModeDialog = false
             },
             title = stringResource(R.string.ai_translation_mode),
@@ -157,6 +167,7 @@ fun ManualLyricsTranslationDialog(
                             translatedLines = lines,
                             targetLanguageCode = selectedLanguageCode,
                             mode = selectedMode,
+                            activeSongIdProvider = { playerConnection?.mediaMetadata?.value?.id },
                         )
                         isImporting = false
                         when (result) {
