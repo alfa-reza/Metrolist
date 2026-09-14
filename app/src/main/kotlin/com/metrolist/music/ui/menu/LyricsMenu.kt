@@ -84,8 +84,6 @@ import com.metrolist.music.constants.TranslateModeKey
 import com.metrolist.music.constants.RespectAgentPositioningKey
 import com.metrolist.music.constants.ShowIntervalIndicatorKey
 import com.metrolist.music.constants.OpenRouterBaseUrlKey
-import com.metrolist.music.constants.OpenRouterDefaultBaseUrl
-import com.metrolist.music.constants.OpenRouterDefaultModel
 import com.metrolist.music.constants.OpenRouterModelKey
 import com.metrolist.music.constants.DeeplFormalityKey
 import com.metrolist.music.utils.rememberPreference
@@ -105,16 +103,18 @@ fun LyricsMenu(
     
     val openRouterApiKey by rememberPreference(OpenRouterApiKey, "")
     val deeplApiKey by rememberPreference(DeeplApiKey, "")
-    val aiProvider by rememberPreference(AiProviderKey, "OpenRouter")
+    val aiProvider by rememberPreference(AiProviderKey, "Kilo AI Free")
     val translateLanguage by rememberPreference(TranslateLanguageKey, "en")
     val translateMode by rememberPreference(TranslateModeKey, "Literal")
-    val openRouterBaseUrl by rememberPreference(OpenRouterBaseUrlKey, OpenRouterDefaultBaseUrl)
-    val openRouterModel by rememberPreference(OpenRouterModelKey, OpenRouterDefaultModel)
+    val openRouterBaseUrl by rememberPreference(OpenRouterBaseUrlKey, "https://api.kilo.ai/api/gateway/chat/completions")
+    val openRouterModel by rememberPreference(OpenRouterModelKey, "kilo-auto/free")
     val deeplFormality by rememberPreference(DeeplFormalityKey, "default")
     var respectAgentPositioning by rememberPreference(RespectAgentPositioningKey, true)
     var showIntervalIndicator by rememberPreference(ShowIntervalIndicatorKey, true)
 
-    val hasApiKey = if (aiProvider == "DeepL") deeplApiKey.isNotBlank() else openRouterApiKey.isNotBlank()
+    val isKeyRequired = LyricsTranslationHelper.isApiKeyRequired(aiProvider)
+    val effectiveApiKey = LyricsTranslationHelper.resolveEffectiveApiKey(aiProvider, openRouterApiKey, deeplApiKey)
+    val isTranslationAvailable = !isKeyRequired || effectiveApiKey.isNotBlank()
     
     // Observe the authoritative translation-active state from the singleton; this persists
     // correctly across menu open/close cycles and avoids the lyricsProvider() race condition.
@@ -474,8 +474,8 @@ fun LyricsMenu(
         item {
             Material3MenuGroup(
                 items = buildList {
-                    // Add translation toggle option if API key is configured
-                    if (hasApiKey) {
+                    // Add translation toggle option if translation is available
+                    if (isTranslationAvailable) {
                         add(
                             Material3MenuItemData(
                                 title = { Text(stringResource(R.string.ai_lyrics_translation)) },

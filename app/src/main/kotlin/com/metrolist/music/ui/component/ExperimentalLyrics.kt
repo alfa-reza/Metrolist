@@ -99,8 +99,6 @@ import com.metrolist.music.constants.LyricsRomanizeList
 import com.metrolist.music.constants.LyricsTextPositionKey
 import com.metrolist.music.constants.OpenRouterApiKey
 import com.metrolist.music.constants.OpenRouterBaseUrlKey
-import com.metrolist.music.constants.OpenRouterDefaultBaseUrl
-import com.metrolist.music.constants.OpenRouterDefaultModel
 import com.metrolist.music.constants.OpenRouterModelKey
 import com.metrolist.music.constants.PlayerBackgroundStyle
 import com.metrolist.music.constants.PlayerBackgroundStyleKey
@@ -170,9 +168,9 @@ fun ExperimentalLyrics(
     // AI Translation Preferences
     val openRouterApiKey by rememberPreference(OpenRouterApiKey, "")
     val deeplApiKey by rememberPreference(DeeplApiKey, "")
-    val aiProvider by rememberPreference(AiProviderKey, "OpenRouter")
-    val openRouterBaseUrl by rememberPreference(OpenRouterBaseUrlKey, OpenRouterDefaultBaseUrl)
-    val openRouterModel by rememberPreference(OpenRouterModelKey, OpenRouterDefaultModel)
+    val aiProvider by rememberPreference(AiProviderKey, "Kilo AI Free")
+    val openRouterBaseUrl by rememberPreference(OpenRouterBaseUrlKey, "https://api.kilo.ai/api/gateway/chat/completions")
+    val openRouterModel by rememberPreference(OpenRouterModelKey, "kilo-auto/free")
     val translateLanguage by rememberPreference(TranslateLanguageKey, "en")
     val translateMode by rememberPreference(TranslateModeKey, "Literal")
     val deeplFormality by rememberPreference(DeeplFormalityKey, "default")
@@ -264,8 +262,9 @@ fun ExperimentalLyrics(
         database
     ) {
         LyricsTranslationHelper.manualTrigger.collectLatest {
-            val effectiveApiKey = if (aiProvider == "DeepL") deeplApiKey else openRouterApiKey
-            if (showLyrics && lines.isNotEmpty() && effectiveApiKey.isNotBlank()) {
+            val isKeyRequired = LyricsTranslationHelper.isApiKeyRequired(aiProvider)
+            val effectiveApiKey = LyricsTranslationHelper.resolveEffectiveApiKey(aiProvider, openRouterApiKey, deeplApiKey)
+            if (showLyrics && lines.isNotEmpty() && (!isKeyRequired || effectiveApiKey.isNotBlank())) {
                 LyricsTranslationHelper.translateLyrics(
                     lyrics = lines,
                     targetLanguage = translateLanguage,
@@ -283,7 +282,7 @@ fun ExperimentalLyrics(
                     database = database,
                     systemPrompt = aiSystemPrompt,
                 )
-            } else if (effectiveApiKey.isBlank()) {
+            } else if (isKeyRequired && effectiveApiKey.isBlank()) {
                 Toast.makeText(context, context.getString(R.string.ai_api_key_required), Toast.LENGTH_SHORT).show()
             }
         }

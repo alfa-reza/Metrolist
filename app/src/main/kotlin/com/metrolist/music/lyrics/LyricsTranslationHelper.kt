@@ -165,6 +165,19 @@ object LyricsTranslationHelper {
         }
     }
 
+    fun isApiKeyRequired(provider: String): Boolean = provider != "Kilo AI Free"
+
+    fun resolveEffectiveApiKey(
+        provider: String,
+        apiKey: String,
+        deeplApiKey: String = "",
+    ): String =
+        when {
+            !isApiKeyRequired(provider) -> ""
+            provider == "DeepL" -> deeplApiKey
+            else -> apiKey
+        }
+
     fun translateLyrics(
         lyrics: List<LyricsEntry>,
         targetLanguage: String,
@@ -192,8 +205,9 @@ object LyricsTranslationHelper {
             scope.launch(Dispatchers.IO) {
                 try {
                     // Validate inputs
-                    val effectiveApiKey = if (provider == "DeepL") deeplApiKey else apiKey
-                    if (effectiveApiKey.isBlank()) {
+                    val isKeyRequired = isApiKeyRequired(provider)
+                    val effectiveApiKey = resolveEffectiveApiKey(provider, apiKey, deeplApiKey)
+                    if (isKeyRequired && effectiveApiKey.isBlank()) {
                         _status.value = TranslationStatus.Error(context.getString(com.metrolist.music.R.string.ai_error_api_key_required))
                         return@launch
                     }
@@ -296,7 +310,7 @@ object LyricsTranslationHelper {
                                 .streamTranslation(
                                     text = fullText,
                                     targetLanguage = fullLanguageName,
-                                    apiKey = apiKey,
+                                    apiKey = effectiveApiKey,
                                     baseUrl = baseUrl,
                                     model = model,
                                     mode = mode,
@@ -350,7 +364,7 @@ object LyricsTranslationHelper {
                             OpenRouterService.translate(
                                 text = fullText,
                                 targetLanguage = fullLanguageName,
-                                apiKey = apiKey,
+                                apiKey = effectiveApiKey,
                                 baseUrl = baseUrl,
                                 model = model,
                                 mode = mode,

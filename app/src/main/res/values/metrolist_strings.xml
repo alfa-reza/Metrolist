@@ -683,6 +683,9 @@
     <string name="ai_translation_transcribed">Transcription</string>
     <string name="ai_translation_transcribed_desc">Converts pronunciation into the target script</string>
     <string name="ai_api_key_required">API key required</string>
+    <string name="ai_provider_kilo_help">No API key required</string>
+    <string name="ai_kilo_models_info_title">Kilo AI Free models</string>
+    <string name="ai_kilo_models_info_desc">Free model availability may change. If the selected model is unavailable, try kilo-auto/free or openrouter/free.</string>
     <string name="ai_error_api_key_required">An API key is required</string>
     <string name="ai_error_no_lyrics">No lyrics to translate</string>
     <string name="ai_error_lyrics_empty">Lyrics are empty</string>

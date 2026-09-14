@@ -12,11 +12,17 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.platform.LocalContext
+import androidx.datastore.core.DataMigration
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.preferencesDataStore
+import com.metrolist.music.constants.AiProviderKey
+import com.metrolist.music.constants.OpenRouterApiKey
+import com.metrolist.music.constants.OpenRouterBaseUrlKey
+import com.metrolist.music.constants.OpenRouterDefaultBaseUrl
+import com.metrolist.music.constants.OpenRouterModelKey
 import com.metrolist.music.extensions.toEnum
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -28,6 +34,30 @@ import kotlin.properties.ReadOnlyProperty
 import timber.log.Timber
 import java.io.File
 import java.io.IOException
+
+private object PreserveLegacyOpenRouterMigration : DataMigration<Preferences> {
+    override suspend fun shouldMigrate(currentData: Preferences): Boolean =
+        currentData[AiProviderKey] == null &&
+            currentData[OpenRouterApiKey]?.isNotBlank() == true
+
+    override suspend fun migrate(currentData: Preferences): Preferences {
+        val migrated = currentData.toMutablePreferences()
+
+        migrated[AiProviderKey] = "OpenRouter"
+
+        if (migrated[OpenRouterBaseUrlKey] == null) {
+            migrated[OpenRouterBaseUrlKey] = OpenRouterDefaultBaseUrl
+        }
+
+        if (migrated[OpenRouterModelKey] == null) {
+            migrated[OpenRouterModelKey] = "google/gemini-2.5-flash-lite"
+        }
+
+        return migrated.toPreferences()
+    }
+
+    override suspend fun cleanUp() = Unit
+}
 
 @Volatile private var dataStoreInstance: DataStore<Preferences>? = null
 private val dataStoreLock = Any()
@@ -42,7 +72,10 @@ val Context.dataStore: DataStore<Preferences>
             // deep sleep, causing IOException in FileStorageConnection.writeScope()
             // that crashes the process and triggers a soft reboot.
             File(filesDir, "datastore").mkdirs()
-            return preferencesDataStore(name = "settings")
+            return preferencesDataStore(
+                name = "settings",
+                produceMigrations = { listOf(PreserveLegacyOpenRouterMigration) },
+            )
                 .getValue(this, ::dataStore)
                 .also { dataStoreInstance = it }
         }

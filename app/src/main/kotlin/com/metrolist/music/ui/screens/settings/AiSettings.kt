@@ -64,10 +64,10 @@ import com.metrolist.music.utils.rememberPreference
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AiSettings(navController: NavController) {
-    var aiProvider by rememberPreference(AiProviderKey, "OpenRouter")
+    var aiProvider by rememberPreference(AiProviderKey, "Kilo AI Free")
     var openRouterApiKey by rememberPreference(OpenRouterApiKey, "")
-    var openRouterBaseUrl by rememberPreference(OpenRouterBaseUrlKey, "https://openrouter.ai/api/v1/chat/completions")
-    var openRouterModel by rememberPreference(OpenRouterModelKey, "google/gemini-2.5-flash-lite")
+    var openRouterBaseUrl by rememberPreference(OpenRouterBaseUrlKey, "https://api.kilo.ai/api/gateway/chat/completions")
+    var openRouterModel by rememberPreference(OpenRouterModelKey, "kilo-auto/free")
     var translateLanguage by rememberPreference(TranslateLanguageKey, "en")
     var translateMode by rememberPreference(TranslateModeKey, "Literal")
     var deeplApiKey by rememberPreference(DeeplApiKey, "")
@@ -76,6 +76,7 @@ fun AiSettings(navController: NavController) {
 
     val aiProviders =
         mapOf(
+            "Kilo AI Free" to "https://api.kilo.ai/api/gateway/chat/completions",
             "OpenRouter" to "https://openrouter.ai/api/v1/chat/completions",
             "OpenAI" to "https://api.openai.com/v1/chat/completions",
             "Perplexity" to "https://api.perplexity.ai/chat/completions",
@@ -90,6 +91,7 @@ fun AiSettings(navController: NavController) {
 
     val providerHelpText =
         mapOf(
+            "Kilo AI Free" to stringResource(R.string.ai_provider_kilo_help),
             "OpenRouter" to stringResource(R.string.ai_provider_openrouter_help),
             "OpenAI" to stringResource(R.string.ai_provider_openai_help),
             "Perplexity" to stringResource(R.string.ai_provider_perplexity_help),
@@ -104,6 +106,21 @@ fun AiSettings(navController: NavController) {
 
     val modelsByProvider =
         mapOf(
+            "Kilo AI Free" to
+                listOf(
+                    "kilo-auto/free",
+                    "openrouter/free",
+                    "poolside/laguna-xs-2.1:free",
+                    "inclusionai/ling-3.0-flash-vl:free",
+                    "inclusionai/ling-3.0-flash-sante:free",
+                    "inclusionai/ling-3.0-flash-fin:free",
+                    "dots-studio/dots-3-note-preview:free",
+                    "nvidia/nemotron-3-ultra-550b-a55b:free",
+                    "nvidia/nemotron-3.5-lightning:free",
+                    "nvidia/nemotron-3-super-120b-a12b:free",
+                    "stepfun/step-3.7-flash:free",
+                    "liquid/lfm-2.5-2.6b:free",
+                ),
             "OpenRouter" to
                 listOf(
                     "inception/mercury-2.5-preview", // really fucking fast
@@ -178,6 +195,7 @@ fun AiSettings(navController: NavController) {
     var showModelDialog by rememberSaveable { mutableStateOf(false) }
     var showCustomModelInput by rememberSaveable { mutableStateOf(false) }
     var showSystemPromptDialog by rememberSaveable { mutableStateOf(false) }
+    var showKiloModelInfoDialog by rememberSaveable { mutableStateOf(false) }
 
     if (showProviderHelpDialog) {
         AlertDialog(
@@ -278,6 +296,25 @@ fun AiSettings(navController: NavController) {
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 }
+            },
+        )
+    }
+
+    if (showKiloModelInfoDialog) {
+        AlertDialog(
+            onDismissRequest = { showKiloModelInfoDialog = false },
+            confirmButton = {
+                TextButton(onClick = { showKiloModelInfoDialog = false }) {
+                    Text(stringResource(android.R.string.ok))
+                }
+            },
+            icon = { Icon(painterResource(R.drawable.info), null) },
+            title = { Text(stringResource(R.string.ai_kilo_models_info_title)) },
+            text = {
+                Text(
+                    text = stringResource(R.string.ai_kilo_models_info_desc),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
             },
         )
     }
@@ -404,6 +441,7 @@ fun AiSettings(navController: NavController) {
     }
 
     if (showModelDialog) {
+        val isKiloFree = aiProvider == "Kilo AI Free"
         EnumDialog(
             onDismiss = { showModelDialog = false },
             onSelect = {
@@ -416,8 +454,15 @@ fun AiSettings(navController: NavController) {
                 }
             },
             title = stringResource(R.string.ai_model),
-            current = if (openRouterModel in commonModels) openRouterModel else "custom_input",
-            values = commonModels + "custom_input",
+            current =
+                if (openRouterModel in commonModels) {
+                    openRouterModel
+                } else if (isKiloFree) {
+                    commonModels.firstOrNull() ?: ""
+                } else {
+                    "custom_input"
+                },
+            values = if (isKiloFree) commonModels else commonModels + "custom_input",
             valueText = {
                 if (it == "custom_input") "Custom" else it
             },
@@ -564,28 +609,44 @@ fun AiSettings(navController: NavController) {
                             ),
                         )
                     } else {
-                        add(
-                            Material3SettingsItem(
-                                icon = painterResource(R.drawable.key),
-                                title = { Text(stringResource(R.string.ai_api_key)) },
-                                description = {
-                                    Text(
-                                        if (openRouterApiKey.isNotEmpty()) {
-                                            "•".repeat(minOf(openRouterApiKey.length, 8))
-                                        } else {
-                                            stringResource(R.string.not_set)
-                                        },
-                                    )
-                                },
-                                onClick = { showApiKeyDialog = true },
-                            ),
-                        )
+                        if (aiProvider != "Kilo AI Free") {
+                            add(
+                                Material3SettingsItem(
+                                    icon = painterResource(R.drawable.key),
+                                    title = { Text(stringResource(R.string.ai_api_key)) },
+                                    description = {
+                                        Text(
+                                            if (openRouterApiKey.isNotEmpty()) {
+                                                "•".repeat(minOf(openRouterApiKey.length, 8))
+                                            } else {
+                                                stringResource(R.string.not_set)
+                                            },
+                                        )
+                                    },
+                                    onClick = { showApiKeyDialog = true },
+                                ),
+                            )
+                        }
                         add(
                             Material3SettingsItem(
                                 icon = painterResource(R.drawable.discover_tune),
                                 title = { Text(stringResource(R.string.ai_model)) },
                                 description = { Text(openRouterModel.ifBlank { stringResource(R.string.not_set) }) },
                                 onClick = { showModelDialog = true },
+                                trailingContent =
+                                    if (aiProvider == "Kilo AI Free") {
+                                        {
+                                            IconButton(onClick = { showKiloModelInfoDialog = true }) {
+                                                Icon(
+                                                    painterResource(R.drawable.info),
+                                                    contentDescription = stringResource(R.string.ai_kilo_models_info_title),
+                                                    modifier = Modifier.size(20.dp),
+                                                )
+                                            }
+                                        }
+                                    } else {
+                                        null
+                                    },
                             ),
                         )
                     }

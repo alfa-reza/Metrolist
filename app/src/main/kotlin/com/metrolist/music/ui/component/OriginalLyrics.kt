@@ -219,9 +219,9 @@ fun OriginalLyrics(
 
     val openRouterApiKey by rememberPreference(OpenRouterApiKey, "")
     val deeplApiKey by rememberPreference(DeeplApiKey, "")
-    val aiProvider by rememberPreference(AiProviderKey, "OpenRouter")
-    val openRouterBaseUrl by rememberPreference(OpenRouterBaseUrlKey, "https://openrouter.ai/api/v1/chat/completions")
-    val openRouterModel by rememberPreference(OpenRouterModelKey, "google/gemini-2.5-flash-lite")
+    val aiProvider by rememberPreference(AiProviderKey, "Kilo AI Free")
+    val openRouterBaseUrl by rememberPreference(OpenRouterBaseUrlKey, "https://api.kilo.ai/api/gateway/chat/completions")
+    val openRouterModel by rememberPreference(OpenRouterModelKey, "kilo-auto/free")
     val translateLanguage by rememberPreference(TranslateLanguageKey, "en")
     val translateMode by rememberPreference(TranslateModeKey, "Literal")
     val deeplFormality by rememberPreference(DeeplFormalityKey, "default")
@@ -388,8 +388,9 @@ fun OriginalLyrics(
     // Listen for manual trigger
     LaunchedEffect(showLyrics, lines.size) {
         LyricsTranslationHelper.manualTrigger.collect {
-            val effectiveApiKey = if (aiProvider == "DeepL") deeplApiKey else openRouterApiKey
-            if (showLyrics && lines.isNotEmpty() && effectiveApiKey.isNotBlank()) {
+            val isKeyRequired = LyricsTranslationHelper.isApiKeyRequired(aiProvider)
+            val effectiveApiKey = LyricsTranslationHelper.resolveEffectiveApiKey(aiProvider, openRouterApiKey, deeplApiKey)
+            if (showLyrics && lines.isNotEmpty() && (!isKeyRequired || effectiveApiKey.isNotBlank())) {
                 LyricsTranslationHelper.translateLyrics(
                     lyrics = lines,
                     targetLanguage = translateLanguage,
@@ -407,7 +408,7 @@ fun OriginalLyrics(
                     database = database,
                     systemPrompt = aiSystemPrompt,
                 )
-            } else if (effectiveApiKey.isBlank()) {
+            } else if (isKeyRequired && effectiveApiKey.isBlank()) {
                 Toast.makeText(context, aiApiKeyRequiredStr, Toast.LENGTH_SHORT).show()
             }
         }
