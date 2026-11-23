@@ -78,7 +78,7 @@ on:
 jobs:
   build:
     name: APK
-    runs-on: blacksmith-8vcpu-ubuntu-2604
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - name: Check out repository
